@@ -48,9 +48,27 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
+data "aws_caller_identity" "current" {}
+
+data "aws_iam_policy_document" "lock_kms" {
+  statement {
+    sid     = "EnableRootAccountAccess"
+    effect  = "Allow"
+    actions = ["kms:*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+
+    resources = ["*"]
+  }
+}
+
 resource "aws_kms_key" "lock" {
   description         = "CMK for encrypting the Terraform lock DynamoDB table"
   enable_key_rotation = true
+  policy              = data.aws_iam_policy_document.lock_kms.json
 }
 
 resource "aws_kms_alias" "lock" {
