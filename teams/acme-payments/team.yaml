@@ -1,0 +1,6 @@
+team: acme-payments
+owner: millad90s@gmail.com
+cost_center: CC-09822
+buckets:
+  - name: reelzpro23
+    visibility: private
