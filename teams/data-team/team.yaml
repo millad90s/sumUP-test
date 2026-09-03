@@ -1,0 +1,6 @@
+team: data-team
+owner: data@gmail.com
+cost_center: CC-098
+buckets:
+  - name: ss
+    visibility: private
