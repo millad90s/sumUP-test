@@ -115,10 +115,45 @@ Example teams included in this repo (`teams/`):
 | `acme-marketing-site` | a public bucket alongside a private one |
 | `edge-max-len-team-01` | team+bucket name combination near the 63-char S3 limit |
 
+## CI/CD
+
+Two workflows, both keyed off `scripts/detect-changed-teams.sh` (a `git diff --name-status`
+against `teams/**/team.yaml`, runnable standalone or in CI):
+
+- **`team-plan.yml`** (on PR touching `teams/**/team.yaml`): validates every changed
+  `team.yaml` against the JSON Schema, runs `terraform fmt -check`/`tflint`/`checkov` once, runs
+  the module's `terraform test` suite, then for each *changed* team (in parallel, one per matrix
+  entry) runs `init` → `validate` → `plan` and comments the plan on the PR. For each *removed*
+  team.yaml it runs `plan -destroy` and comments it too — informational only, nothing is destroyed
+  from a PR.
+- **`team-apply.yml`** (on push to `main`): re-detects the same diff against the pushed commit,
+  then applies each changed team under the `production` GitHub Environment (requires a reviewer),
+  and destroys each removed team under a *separate* `production-destroy` Environment (its own
+  required reviewer) — so an offboarding destroy is never a side effect of a routine apply
+  approval.
+
+Both use the diff-based matrix so a push touching 3 of 300 teams only plans/applies those 3, in
+parallel, instead of the whole fleet.
+
+## Offboarding sequence
+
+Deleting `teams/<team>/team.yaml` never auto-destroys anything. The flow:
+
+1. Open a PR removing `teams/<team>/team.yaml`. `team-plan.yml` detects it as a removal and posts
+   a `plan -destroy` on the PR for review — this is the last chance to catch a mistake before
+   anything is scheduled for deletion.
+2. Merge the PR. `team-apply.yml` runs `offboard-destroy`, which pauses for approval in the
+   `production-destroy` protected environment.
+3. A platform team member approves. The job destroys the team's IAM role and S3 buckets.
+4. After a successful destroy, manually remove the team's state key
+   (`teams/<team>/terraform.tfstate`) from the shared state bucket, and move the historical
+   `team.yaml` into `teams/_offboarded/<team>/team.yaml` in a follow-up commit (kept for audit
+   trail, no longer read by any workflow since it's outside `teams/*/team.yaml`'s active path).
+
 ## Roadmap (phased delivery)
 
 - [x] **Phase 1** — repo skeleton, this README's architecture section, JSON Schema, example teams
 - [x] **Phase 2** — `modules/team-resources` + `live/team`, fully working, module README
 - [x] **Phase 3** — full test suite (terraform test, schema contract test, tflint/checkov), run locally
-- [ ] **Phase 4** — GitHub Actions workflows + `scripts/`
+- [x] **Phase 4** — GitHub Actions workflows + `scripts/`
 - [ ] **Phase 5** — README polish, decision rationale, onboarding/offboarding walkthroughs, at-scale section
