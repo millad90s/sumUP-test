@@ -1,0 +1,6 @@
+team: acme-marketing-site
+owner: acme-marketing-site@gg.co
+cost_center: CC-092
+buckets:
+  - name: uploads2
+    visibility: private
