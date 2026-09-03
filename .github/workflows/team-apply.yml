@@ -7,7 +7,7 @@ name: Team Apply
 # apply run).
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     paths:
       - "teams/**/team.yaml"
 
