@@ -1,0 +1,33 @@
+directory:
+  - modules
+  - live
+  - bootstrap
+framework:
+  - terraform
+compact: true
+quiet: true
+download-external-modules: false
+skip-check:
+  # State bucket access logging is a reasonable production hardening step,
+  # out of scope for this exercise (see README "at scale" section).
+  - CKV_AWS_18
+  # S3 Object Lock isn't needed for team-owned working buckets.
+  - CKV_AWS_144
+  # False positive: checkov can't correlate aws_s3_bucket_public_access_block
+  # to aws_s3_bucket.this through the for_each key indirection, so it always
+  # reports "no public access block" even though every bucket gets one
+  # (see aws_s3_bucket_public_access_block.private/.public in the module).
+  - CKV2_AWS_6
+  # Lifecycle expiration, event notifications, and KMS-by-default are
+  # reasonable production hardening steps not required by this exercise's
+  # spec (default SSE with AES256 is what was asked for).
+  - CKV2_AWS_61
+  - CKV2_AWS_62
+  - CKV_AWS_145
+  # These only ever fire on aws_s3_bucket_public_access_block.public in
+  # modules/team-resources - the explicit, opt-in relaxation of the two
+  # settings that let a public-read bucket policy take effect. Private
+  # buckets (the default posture) keep both enabled - see
+  # aws_s3_bucket_public_access_block.private and the module README.
+  - CKV_AWS_54
+  - CKV_AWS_56
