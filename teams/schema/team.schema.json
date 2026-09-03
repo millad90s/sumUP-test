@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/schemas/team.schema.json",
+  "title": "Team Declaration",
+  "description": "Self-service contract a product team uses to declare its identity and desired S3 buckets. This is the ONLY file a team edits; the platform's generic Terraform root consumes it via yamldecode().",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["team", "owner", "cost_center", "buckets"],
+  "properties": {
+    "team": {
+      "type": "string",
+      "description": "Team slug, used to derive resource names and the trust policy scope. Must match the directory name teams/<team>/.",
+      "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$"
+    },
+    "owner": {
+      "type": "string",
+      "description": "Contact email for the team, used for tagging/cost allocation and audit trail.",
+      "format": "email",
+      "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    },
+    "cost_center": {
+      "type": "string",
+      "description": "Finance cost center code, applied as a tag on every resource.",
+      "pattern": "^CC-[0-9]{3,6}$"
+    },
+    "buckets": {
+      "type": "array",
+      "description": "One or more S3 buckets to provision for this team.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "visibility"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Bucket suffix; final bucket name is <company_prefix>-<team>-<name>, enforced by the Terraform module.",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,40}[a-z0-9]$"
+          },
+          "visibility": {
+            "type": "string",
+            "description": "No default is permitted anywhere in the pipeline. Must be explicit.",
+            "enum": ["public", "private"]
+          }
+        }
+      }
+    }
+  }
+}

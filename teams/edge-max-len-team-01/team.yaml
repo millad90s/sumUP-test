@@ -1,0 +1,8 @@
+# Edge case: team + bucket name combination near the 63-char S3 bucket name limit.
+# Full name = acme-edge-max-len-team-01-data-archive-storage-bucket-edge012 (61 chars).
+team: edge-max-len-team-01
+owner: edge-max-len-team-01@company.com
+cost_center: CC-1099
+buckets:
+  - name: data-archive-storage-bucket-edge012
+    visibility: private

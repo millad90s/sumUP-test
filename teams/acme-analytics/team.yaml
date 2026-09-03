@@ -1,0 +1,11 @@
+# Example: multiple private buckets for one team
+team: acme-analytics
+owner: acme-analytics@company.com
+cost_center: CC-1002
+buckets:
+  - name: raw-events
+    visibility: private
+  - name: curated
+    visibility: private
+  - name: exports
+    visibility: private

@@ -1,0 +1,9 @@
+# Example: mix of a private bucket and an explicit public-read bucket
+team: acme-marketing-site
+owner: acme-marketing-site@company.com
+cost_center: CC-1003
+buckets:
+  - name: build-artifacts
+    visibility: private
+  - name: public-assets
+    visibility: public
