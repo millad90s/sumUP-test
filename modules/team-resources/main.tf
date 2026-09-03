@@ -5,6 +5,12 @@ locals {
 
   private_bucket_names = [for name, b in local.buckets_by_name : name if b.visibility == "private"]
   public_bucket_names  = [for name, b in local.buckets_by_name : name if b.visibility == "public"]
+
+  common_tags = {
+    Owner       = var.owner
+    CostCenter  = var.cost_center
+    Environment = var.environment
+  }
 }
 
 # --- S3 buckets -------------------------------------------------------------
@@ -14,9 +20,9 @@ resource "aws_s3_bucket" "this" {
 
   bucket = local.full_bucket_name[each.key]
 
-  tags = {
+  tags = merge(local.common_tags, {
     Visibility = each.value.visibility
-  }
+  })
 
   lifecycle {
     precondition {
@@ -181,6 +187,7 @@ resource "aws_iam_role" "team" {
   name               = "${var.company_prefix}-${var.team_name}-role"
   assume_role_policy = local.assume_role_policy
   description        = "Role for team ${var.team_name}, scoped to its own S3 buckets."
+  tags               = local.common_tags
 }
 
 resource "aws_iam_role_policy" "team_bucket_access" {
