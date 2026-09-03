@@ -1,0 +1,125 @@
+name: Team Apply
+
+# Runs on every push to main that touches a team's config - i.e. right after
+# a PR from team-plan.yml gets merged. Applies changed teams (gated by the
+# "production" environment) and destroys removed teams (gated separately by
+# "production-destroy", so an offboard is never a side effect of a normal
+# apply run).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "teams/**/team.yaml"
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  STATE_BUCKET: acme-platform-terraform-state
+  LOCK_TABLE: acme-platform-terraform-locks
+  COMPANY_PREFIX: acme
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed_teams: ${{ steps.detect.outputs.changed_teams }}
+      removed_teams: ${{ steps.detect.outputs.removed_teams }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: detect
+        run: ./scripts/detect-changed-teams.sh "${{ github.event.before }}" "${{ github.sha }}"
+
+  apply:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.changed_teams != '[]'
+    # Requires a human reviewer to approve in GitHub's Environment settings
+    # before this job runs - the gate the spec asks for.
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        team: ${{ fromJson(needs.detect-changes.outputs.changed_teams) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # - uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: ${{ secrets.APPLY_ROLE_ARN }}
+      #     aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform init
+        working-directory: live/team
+        run: |
+          terraform init -input=false -reconfigure \
+            -backend-config="bucket=${{ env.STATE_BUCKET }}" \
+            -backend-config="key=teams/${{ matrix.team }}/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.LOCK_TABLE }}"
+
+      - name: terraform apply
+        working-directory: live/team
+        run: |
+          terraform apply -auto-approve \
+            -var="team_config_path=../../teams/${{ matrix.team }}/team.yaml" \
+            -var="aws_account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="company_prefix=${{ env.COMPANY_PREFIX }}"
+
+  offboard-destroy:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.removed_teams != '[]'
+    # Separate protected environment from "production" - offboarding a team
+    # is a bigger blast radius than a normal apply and gets its own
+    # required-reviewer gate. See README "Offboarding" for the full sequence
+    # (this job only destroys the AWS resources; the team.yaml archive and
+    # state-key cleanup steps documented there are done by whoever approves).
+    environment: production-destroy
+    strategy:
+      fail-fast: false
+      matrix:
+        team: ${{ fromJson(needs.detect-changes.outputs.removed_teams) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The team.yaml no longer exists on this ref - check out the
+          # commit just before the removal so the module still has the
+          # bucket list to build a correct destroy plan against.
+          ref: ${{ github.event.before }}
+
+      # - uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: ${{ secrets.APPLY_ROLE_ARN }}
+      #     aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform init
+        working-directory: live/team
+        run: |
+          terraform init -input=false -reconfigure \
+            -backend-config="bucket=${{ env.STATE_BUCKET }}" \
+            -backend-config="key=teams/${{ matrix.team }}/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.LOCK_TABLE }}"
+
+      - name: terraform destroy
+        working-directory: live/team
+        run: |
+          terraform destroy -auto-approve \
+            -var="team_config_path=../../teams/${{ matrix.team }}/team.yaml" \
+            -var="aws_account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="company_prefix=${{ env.COMPANY_PREFIX }}"

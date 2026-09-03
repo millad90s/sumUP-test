@@ -1,0 +1,199 @@
+name: Team Plan
+
+# Runs on every PR that touches a team's config. Nothing here ever applies -
+# this workflow only ever plans, so it's safe to run on untrusted PR branches.
+on:
+  pull_request:
+    paths:
+      - "teams/**/team.yaml"
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  STATE_BUCKET: acme-platform-terraform-state
+  LOCK_TABLE: acme-platform-terraform-locks
+  COMPANY_PREFIX: acme
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed_teams: ${{ steps.detect.outputs.changed_teams }}
+      removed_teams: ${{ steps.detect.outputs.removed_teams }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: detect
+        run: ./scripts/detect-changed-teams.sh "origin/${{ github.event.pull_request.base.ref }}" "HEAD"
+
+  schema-validate:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.changed_teams != '[]'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r tests/requirements.txt
+      - run: python3 tests/validate_team_configs.py
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.changed_teams != '[]'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive .
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - run: tflint --init
+      - run: tflint --recursive
+      - name: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          config_file: .checkov.yaml
+          quiet: true
+
+  module-test:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.changed_teams != '[]'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - working-directory: modules/team-resources
+        run: |
+          terraform init -backend=false -input=false
+          terraform test
+
+  plan:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, schema-validate, static-analysis, module-test]
+    if: needs.detect-changes.outputs.changed_teams != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        team: ${{ fromJson(needs.detect-changes.outputs.changed_teams) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Real deployment would authenticate via OIDC here instead of long-lived
+      # keys - see README "at scale" section:
+      # - uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: ${{ secrets.PLAN_ROLE_ARN }}
+      #     aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform init
+        working-directory: live/team
+        run: |
+          terraform init -input=false -reconfigure \
+            -backend-config="bucket=${{ env.STATE_BUCKET }}" \
+            -backend-config="key=teams/${{ matrix.team }}/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.LOCK_TABLE }}"
+
+      - name: terraform validate
+        working-directory: live/team
+        run: terraform validate
+
+      - name: terraform plan
+        id: plan
+        working-directory: live/team
+        run: |
+          terraform plan -no-color \
+            -var="team_config_path=../../teams/${{ matrix.team }}/team.yaml" \
+            -var="aws_account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="company_prefix=${{ env.COMPANY_PREFIX }}" \
+            -out=tfplan | tee plan_output.txt
+        continue-on-error: true
+
+      - name: comment plan on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const team = "${{ matrix.team }}";
+            const outcome = "${{ steps.plan.outcome }}";
+            const plan = fs.readFileSync('live/team/plan_output.txt', 'utf8').slice(-60000);
+            const body = `### Terraform plan for \`${team}\` (${outcome})\n<details><summary>Show plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: fail if plan failed
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  offboard-plan:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.removed_teams != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        team: ${{ fromJson(needs.detect-changes.outputs.removed_teams) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform init
+        working-directory: live/team
+        run: |
+          terraform init -input=false -reconfigure \
+            -backend-config="bucket=${{ env.STATE_BUCKET }}" \
+            -backend-config="key=teams/${{ matrix.team }}/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.LOCK_TABLE }}"
+
+      - name: terraform plan -destroy
+        id: plan_destroy
+        working-directory: live/team
+        run: |
+          terraform plan -destroy -no-color \
+            -var="team_config_path=../../teams/${{ matrix.team }}/team.yaml" \
+            -var="aws_account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="company_prefix=${{ env.COMPANY_PREFIX }}" | tee plan_destroy_output.txt
+        continue-on-error: true
+
+      - name: comment destroy plan on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const team = "${{ matrix.team }}";
+            const plan = fs.readFileSync('live/team/plan_destroy_output.txt', 'utf8').slice(-60000);
+            const body = `### ⚠️ Offboarding detected: \`${team}\`\nThis team's config was removed. This is a **plan -destroy only** - nothing is destroyed from this PR. Merging will require a separate manual approval in the \`production-destroy\` environment before anything is deleted. See README "Offboarding" for the full sequence.\n<details><summary>Show destroy plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
