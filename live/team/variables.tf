@@ -19,3 +19,9 @@ variable "aws_account_id" {
   description = "AWS account ID, used to build the ARN of the principal each team's role trusts."
   type        = string
 }
+
+variable "endpoint_url" {
+  description = "Optional custom endpoint (e.g. LocalStack) for s3/iam/sts/dynamodb. Empty means real AWS."
+  type        = string
+  default     = ""
+}
