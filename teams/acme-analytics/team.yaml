@@ -1,0 +1,6 @@
+team: acme-analytics
+owner: acme-analytics@gmail.com
+cost_center: CC-098
+buckets:
+  - name: reelzpro22
+    visibility: private
