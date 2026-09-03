@@ -119,6 +119,6 @@ Example teams included in this repo (`teams/`):
 
 - [x] **Phase 1** — repo skeleton, this README's architecture section, JSON Schema, example teams
 - [x] **Phase 2** — `modules/team-resources` + `live/team`, fully working, module README
-- [ ] **Phase 3** — full test suite (terraform test, schema contract test, tflint/checkov), run locally
+- [x] **Phase 3** — full test suite (terraform test, schema contract test, tflint/checkov), run locally
 - [ ] **Phase 4** — GitHub Actions workflows + `scripts/`
 - [ ] **Phase 5** — README polish, decision rationale, onboarding/offboarding walkthroughs, at-scale section
