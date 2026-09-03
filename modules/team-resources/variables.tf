@@ -55,7 +55,7 @@ variable "buckets" {
   description = "S3 buckets to create for this team. Each entry must explicitly set visibility to \"public\" or \"private\" - there is no default."
   type = list(object({
     name       = string
-    visibility = string
+    visibility = optional(string)
   }))
 
   validation {
@@ -65,9 +65,9 @@ variable "buckets" {
 
   validation {
     condition = alltrue([
-      for b in var.buckets : contains(["public", "private"], b.visibility)
+      for b in var.buckets : b.visibility == null ? false : contains(["public", "private"], b.visibility)
     ])
-    error_message = "Each bucket's visibility must be exactly \"public\" or \"private\"."
+    error_message = "Each bucket's visibility must be explicitly set to \"public\" or \"private\" - there is no default."
   }
 
   validation {

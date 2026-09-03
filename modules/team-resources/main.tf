@@ -74,42 +74,87 @@ resource "aws_s3_bucket_public_access_block" "public" {
   restrict_public_buckets = false
 }
 
-data "aws_iam_policy_document" "deny_insecure_transport" {
-  for_each = local.buckets_by_name
+locals {
+  # Policies are built with jsonencode() over local values, rather than the
+  # aws_iam_policy_document data source, so their content is fully computable
+  # from configuration alone (needed for `terraform test` with mock_provider
+  # to assert on real policy JSON instead of provider-mocked data).
 
-  statement {
-    sid       = "DenyInsecureTransport"
-    effect    = "Deny"
-    actions   = ["s3:*"]
-    resources = [aws_s3_bucket.this[each.key].arn, "${aws_s3_bucket.this[each.key].arn}/*"]
-
-    principals {
-      type        = "AWS"
-      identifiers = ["*"]
-    }
-
-    condition {
-      test     = "Bool"
-      variable = "aws:SecureTransport"
-      values   = ["false"]
-    }
-  }
-}
-
-data "aws_iam_policy_document" "public_read" {
-  for_each = toset(local.public_bucket_names)
-
-  statement {
-    sid       = "PublicReadOnly"
-    effect    = "Allow"
-    actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.this[each.key].arn}/*"]
-
-    principals {
-      type        = "AWS"
-      identifiers = ["*"]
+  deny_insecure_transport_statement = {
+    for name, b in local.buckets_by_name : name => {
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.this[name].arn, "${aws_s3_bucket.this[name].arn}/*"]
+      Condition = {
+        Bool = {
+          "aws:SecureTransport" = "false"
+        }
+      }
     }
   }
+
+  public_read_statement = {
+    for name in local.public_bucket_names : name => {
+      Sid       = "PublicReadOnly"
+      Effect    = "Allow"
+      Principal = "*"
+      Action    = "s3:GetObject"
+      Resource  = "${aws_s3_bucket.this[name].arn}/*"
+    }
+  }
+
+  private_bucket_policy = {
+    for name in local.private_bucket_names : name => jsonencode({
+      Version   = "2012-10-17"
+      Statement = [local.deny_insecure_transport_statement[name]]
+    })
+  }
+
+  public_bucket_policy = {
+    for name in local.public_bucket_names : name => jsonencode({
+      Version = "2012-10-17"
+      Statement = [
+        local.deny_insecure_transport_statement[name],
+        local.public_read_statement[name],
+      ]
+    })
+  }
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { AWS = var.trusted_principal_arn }
+      Action    = "sts:AssumeRole"
+      Condition = {
+        StringEquals = {
+          "sts:ExternalId" = var.team_name
+        }
+      }
+    }]
+  })
+
+  # Built from the buckets this module actually created for this team - never
+  # a wildcard/prefix - so a naming collision elsewhere can't grant access.
+  team_bucket_access_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ListOwnBuckets"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = [for b in aws_s3_bucket.this : b.arn]
+      },
+      {
+        Sid      = "ReadWriteOwnObjects"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+        Resource = [for b in aws_s3_bucket.this : "${b.arn}/*"]
+      },
+    ]
+  })
 }
 
 # Private buckets only get the TLS-deny statement.
@@ -117,80 +162,29 @@ resource "aws_s3_bucket_policy" "private" {
   for_each = toset(local.private_bucket_names)
 
   bucket = aws_s3_bucket.this[each.key].id
-  policy = data.aws_iam_policy_document.deny_insecure_transport[each.key].json
+  policy = local.private_bucket_policy[each.key]
 }
 
 # Public buckets get TLS-deny plus the explicit public-read grant, combined
 # into a single policy document (a bucket can only have one policy).
-data "aws_iam_policy_document" "public_combined" {
-  for_each = toset(local.public_bucket_names)
-
-  source_policy_documents = [
-    data.aws_iam_policy_document.deny_insecure_transport[each.key].json,
-    data.aws_iam_policy_document.public_read[each.key].json,
-  ]
-}
-
 resource "aws_s3_bucket_policy" "public" {
   for_each = toset(local.public_bucket_names)
 
   bucket     = aws_s3_bucket.this[each.key].id
-  policy     = data.aws_iam_policy_document.public_combined[each.key].json
+  policy     = local.public_bucket_policy[each.key]
   depends_on = [aws_s3_bucket_public_access_block.public]
 }
 
 # --- IAM role ----------------------------------------------------------------
 
-data "aws_iam_policy_document" "assume_role" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "AWS"
-      identifiers = [var.trusted_principal_arn]
-    }
-
-    condition {
-      test     = "StringEquals"
-      variable = "sts:ExternalId"
-      values   = [var.team_name]
-    }
-  }
-}
-
 resource "aws_iam_role" "team" {
   name               = "${var.company_prefix}-${var.team_name}-role"
-  assume_role_policy = data.aws_iam_policy_document.assume_role.json
+  assume_role_policy = local.assume_role_policy
   description        = "Role for team ${var.team_name}, scoped to its own S3 buckets."
-}
-
-# Built from the buckets this module actually created for this team - never
-# a wildcard/prefix - so a naming collision elsewhere can't grant access.
-data "aws_iam_policy_document" "team_bucket_access" {
-  statement {
-    sid    = "ListOwnBuckets"
-    effect = "Allow"
-    actions = [
-      "s3:ListBucket",
-    ]
-    resources = [for b in aws_s3_bucket.this : b.arn]
-  }
-
-  statement {
-    sid    = "ReadWriteOwnObjects"
-    effect = "Allow"
-    actions = [
-      "s3:GetObject",
-      "s3:PutObject",
-      "s3:DeleteObject",
-    ]
-    resources = [for b in aws_s3_bucket.this : "${b.arn}/*"]
-  }
 }
 
 resource "aws_iam_role_policy" "team_bucket_access" {
   name   = "${var.team_name}-bucket-access"
   role   = aws_iam_role.team.id
-  policy = data.aws_iam_policy_document.team_bucket_access.json
+  policy = local.team_bucket_access_policy
 }
