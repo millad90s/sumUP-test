@@ -31,6 +31,26 @@ pip install -r tests/requirements.txt
 python3 tests/validate_team_configs.py
 ```
 
+## Schema property-based tests
+
+`test_team_schema_properties.py` uses [Hypothesis](https://hypothesis.readthedocs.io/) to fuzz
+each regex-constrained field (`team`, `owner`, `cost_center`, bucket `name`) against a plain-Python
+reference implementation of the same rule, generation biased toward each rule's length boundary
+(off-by-one lengths included) - the region a hand-written example test is most likely to miss.
+Also covers structural rules: empty bucket list, unknown top-level keys, and each required field
+actually being required.
+
+```bash
+pip install -r tests/requirements.txt
+pytest tests/test_team_schema_properties.py
+```
+
+To get a single self-contained HTML report (useful as a CI artifact):
+
+```bash
+pytest tests/test_team_schema_properties.py --html=report.html --self-contained-html
+```
+
 ## Static analysis
 
 - `.tflint.hcl` (repo root) - naming convention, unused declarations, documented

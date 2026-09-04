@@ -1,7 +1,0 @@
-# Example: single private bucket (most common case)
-team: acme-payments
-owner: acme-payments@company.com
-cost_center: CC-1001
-buckets:
-  - name: uploads
-    visibility: private

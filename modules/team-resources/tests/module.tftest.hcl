@@ -221,3 +221,155 @@ run "duplicate_bucket_names_fail_validation" {
 
   expect_failures = [var.buckets]
 }
+
+run "uppercase_bucket_name_fails_validation" {
+  command = plan
+
+  variables {
+    team_name = "acme-payments"
+    buckets = [
+      { name = "Uploads", visibility = "private" },
+    ]
+  }
+
+  expect_failures = [var.buckets]
+}
+
+run "single_char_bucket_name_fails_validation" {
+  command = plan
+
+  variables {
+    team_name = "acme-payments"
+    buckets = [
+      { name = "a", visibility = "private" },
+    ]
+  }
+
+  expect_failures = [var.buckets]
+}
+
+run "invalid_owner_email_fails_validation" {
+  command = plan
+
+  variables {
+    team_name = "acme-payments"
+    owner     = "not-an-email"
+    buckets = [
+      { name = "uploads", visibility = "private" },
+    ]
+  }
+
+  expect_failures = [var.owner]
+}
+
+run "invalid_cost_center_fails_validation" {
+  command = plan
+
+  variables {
+    team_name   = "acme-payments"
+    cost_center = "CC-1"
+    buckets = [
+      { name = "uploads", visibility = "private" },
+    ]
+  }
+
+  expect_failures = [var.cost_center]
+}
+
+run "uppercase_company_prefix_fails_validation" {
+  command = plan
+
+  variables {
+    team_name      = "acme-payments"
+    company_prefix = "ACME"
+    buckets = [
+      { name = "uploads", visibility = "private" },
+    ]
+  }
+
+  expect_failures = [var.company_prefix]
+}
+
+run "empty_buckets_list_fails_validation" {
+  command = plan
+
+  variables {
+    team_name = "acme-payments"
+    buckets   = []
+  }
+
+  expect_failures = [var.buckets]
+}
+
+# --- boundary: composed bucket name over the 63-char S3 limit -----------------
+
+run "composed_bucket_name_over_length_limit_fails" {
+  command = plan
+
+  variables {
+    team_name      = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" # 32 chars: max valid team_name length
+    company_prefix = "aaaaaaaaaa"                       # 10 chars: max valid company_prefix length
+    buckets = [
+      { name = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", visibility = "private" }, # 42 chars: max valid bucket name length
+    ]
+  }
+
+  expect_failures = [aws_s3_bucket.this]
+}
+
+# --- mixed visibility within the same team -------------------------------------
+
+run "mixed_public_and_private_buckets_isolated_correctly" {
+  command = apply
+
+  variables {
+    team_name = "acme-analytics"
+    buckets = [
+      { name = "raw-events", visibility = "private" },
+      { name = "public-dashboard", visibility = "public" },
+    ]
+  }
+
+  assert {
+    condition     = contains(keys(aws_s3_bucket_policy.private), "raw-events")
+    error_message = "The private bucket must get the private-only policy."
+  }
+
+  assert {
+    condition     = !contains(keys(aws_s3_bucket_policy.private), "public-dashboard")
+    error_message = "The public bucket must not get the private-only policy."
+  }
+
+  assert {
+    condition     = contains(keys(aws_s3_bucket_policy.public), "public-dashboard")
+    error_message = "The public bucket must get the public-read policy."
+  }
+
+  assert {
+    condition     = !contains(keys(aws_s3_bucket_policy.public), "raw-events")
+    error_message = "The private bucket must not get the public-read policy."
+  }
+
+  assert {
+    condition     = length(jsondecode(aws_iam_role_policy.team_bucket_access.policy).Statement[0].Resource) == 2
+    error_message = "The team's IAM policy must still list both buckets regardless of their visibility."
+  }
+}
+
+# --- assume-role trust is scoped with an ExternalId ----------------------------
+
+run "assume_role_requires_matching_external_id" {
+  command = apply
+
+  variables {
+    team_name = "acme-payments"
+    buckets = [
+      { name = "uploads", visibility = "private" },
+    ]
+  }
+
+  assert {
+    condition = jsondecode(aws_iam_role.team.assume_role_policy).Statement[0].Condition.StringEquals["sts:ExternalId"] == "acme-payments"
+    error_message = "The assume-role trust policy must require an ExternalId matching the team name, to prevent confused-deputy assumption."
+  }
+}

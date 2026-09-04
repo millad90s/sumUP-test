@@ -4,7 +4,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 5.0"
+      version = ">= 6.63"
     }
   }
 }
@@ -12,9 +12,6 @@ terraform {
 provider "aws" {
   region = var.aws_region
 }
-
-# Run once, by the platform team, before any team's live/team config is
-# applied. Not part of the per-team flow - see README for why.
 
 resource "aws_s3_bucket" "state" {
   bucket = var.state_bucket_name
@@ -48,34 +45,6 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
-data "aws_caller_identity" "current" {}
-
-data "aws_iam_policy_document" "lock_kms" {
-  statement {
-    sid     = "EnableRootAccountAccess"
-    effect  = "Allow"
-    actions = ["kms:*"]
-
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
-    }
-
-    resources = ["*"]
-  }
-}
-
-resource "aws_kms_key" "lock" {
-  description         = "CMK for encrypting the Terraform lock DynamoDB table"
-  enable_key_rotation = true
-  policy              = data.aws_iam_policy_document.lock_kms.json
-}
-
-resource "aws_kms_alias" "lock" {
-  name          = "alias/${var.lock_table_name}"
-  target_key_id = aws_kms_key.lock.key_id
-}
-
 resource "aws_dynamodb_table" "lock" {
   name         = var.lock_table_name
   billing_mode = "PAY_PER_REQUEST"
@@ -91,8 +60,7 @@ resource "aws_dynamodb_table" "lock" {
   }
 
   server_side_encryption {
-    enabled     = true
-    kms_key_arn = aws_kms_key.lock.arn
+    enabled = true
   }
 
   lifecycle {
