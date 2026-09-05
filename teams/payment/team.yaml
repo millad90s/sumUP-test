@@ -1,0 +1,6 @@
+team: payment
+owner: millad90s@gmail.com
+cost_center: CC-092
+buckets:
+  - name: uploadfiles
+    visibility: private
